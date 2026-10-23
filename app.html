@@ -22,6 +22,8 @@
   <button id="btn-set" class="icon-btn small" aria-label="Настройки" hidden>&#9881;</button>
 </header>
 
+<div id="alog" class="alog hidden"><div id="alog-lines" class="alog-lines"></div></div>
+
 <main id="msgs">
   <div class="empty" id="empty">
     <div class="empty-logo">&#9638;&#9639;&#9638;</div>
@@ -31,7 +33,6 @@
 </main>
 
 <div id="asks" class="asks hidden"></div>
-<div id="alog" class="alog hidden"><div id="alog-lines" class="alog-lines"></div></div>
 
 <div class="inputbar">
   <button id="kb-call" class="btn-send" aria-label="Вызвать клавиатуру">⌨</button>
@@ -88,6 +89,8 @@
 </div>
 
 <div id="toast"></div>
+<input type="file" id="file-in" multiple hidden
+       accept="image/*,video/*,.pdf,.txt,.md,.csv,.json,.zip,.doc,.docx,.xls,.xlsx">
 <script src="web-config.js"></script>
 <script src="app.js"></script>
 <script>

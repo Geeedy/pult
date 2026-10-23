@@ -1,6 +1,6 @@
 /* ПУЛЬТ — service worker: офлайн-оболочка, сеть всегда в приоритете. */
 "use strict";
-const VER = "pult-v4";
+const VER = "pult-v5";
 const SHELL = [
   "./", "./app.html", "./style.css", "./app.js", "./web-config.js",
   "./manifest.webmanifest", "./icons/icon-192.png", "./icons/icon-512.png",

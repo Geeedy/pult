@@ -36,6 +36,16 @@ function logout() {
   location.replace("index.html");
 }
 
+/* заголовки авторизации: TG -> initData, веб -> токен устройства/ключ */
+function authHeaders(json) {
+  const h = {};
+  if (json) h["Content-Type"] = "application/json";
+  if (isTG()) h["X-Telegram-Init-Data"] = tg.initData;
+  else if (deviceToken()) h["X-Device-Token"] = deviceToken();
+  else h["X-App-Token"] = webToken();
+  return h;
+}
+
 async function sha256Hex(s) {
   const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
@@ -43,6 +53,24 @@ async function sha256Hex(s) {
 
 /* гейт: в вебе без ключа/токена устройства — на страницу входа; в TG не нужен */
 if (!isTG() && !webToken() && !deviceToken()) { location.replace("index.html"); throw new Error("unauthorized"); }
+
+/* ---------- точная высота вьюпорта (холодный старт iOS) ----------
+   До первого тапа 100dvh в standalone-PWA может отдать высоту без нижнего
+   инсета — снизу вылезает чёрная полоса. Берём честную высоту из
+   visualViewport и обновляем на ресайз/клавиатуру. */
+function fitViewport() {
+  const vv = window.visualViewport;
+  const h = vv ? Math.round(vv.height) : window.innerHeight;
+  if (h > 0) document.documentElement.style.setProperty("--app-h", h + "px");
+}
+fitViewport();
+setTimeout(fitViewport, 300);
+setTimeout(fitViewport, 1200);
+addEventListener("resize", fitViewport);
+if (window.visualViewport) {
+  visualViewport.addEventListener("resize", fitViewport);
+  visualViewport.addEventListener("scroll", fitViewport);
+}
 
 /* ---------- Telegram init ---------- */
 /* Отступ сверху: статус-бар + нативная шапка Telegram (пока нет фуллскрина).
@@ -144,10 +172,7 @@ function toast(text, bad) {
 }
 
 async function api(path, opts = {}) {
-  const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
-  if (isTG()) headers["X-Telegram-Init-Data"] = tg.initData;
-  else if (deviceToken()) headers["X-Device-Token"] = deviceToken();
-  else headers["X-App-Token"] = webToken();
+  const headers = Object.assign(authHeaders(!!opts.body), opts.headers || {});
   const res = await fetch(apiBase() + path, Object.assign({}, opts, { headers }));
   if ((res.status === 401 || res.status === 403) && !isTG()) { logout(); throw new Error("unauthorized"); }
   if (!res.ok) {
@@ -167,19 +192,74 @@ const state = {
   model: "",         // модель активной сессии
   streamingSids: new Set(), // чаты с НАШЕЙ отправкой в процессе (изоляция)
   abortCtl: null,
+  histCache: {},     // {sid: последний /messages} — мгновенный рендер при смене
 };
 
 /* ---------- рендер чата ---------- */
 function setEmpty(v) { $("#empty").style.display = v ? "" : "none"; }
 
-function addMsg(role, text, ts, cls) {
+/* markdown-картинки в тексте -> <img> (локальные пути — через прокси сервера) */
+const MD_IMG = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+
+function filexUrl(src, mt) {
+  const key = src.startsWith("sha256:")
+    ? "ref=" + encodeURIComponent(src)
+    : "path=" + encodeURIComponent(src);
+  return apiBase() + "/api/filex?" + key +
+         "&token=" + encodeURIComponent(deviceToken() || webToken()) +
+         (mt ? "&mt=" + encodeURIComponent(mt) : "");
+}
+
+function fillText(el, text) {
+  el.textContent = "";
+  if (!text) return;
+  const plain = !isTG() && !!(deviceToken() || webToken());  // прокси доступен
+  let last = 0, m;
+  MD_IMG.lastIndex = 0;
+  while ((m = MD_IMG.exec(text)) !== null) {
+    if (m.index > last) el.appendChild(document.createTextNode(text.slice(last, m.index)));
+    const src = m[2];
+    const img = document.createElement("img");
+    img.className = "chat-img";
+    img.alt = m[1] || "";
+    img.loading = "lazy";
+    img.src = (/^https?:\/\//i.test(src) || !plain)
+      ? src
+      : filexUrl(src, "");
+    img.addEventListener("click", () => { try { window.open(img.src, "_blank"); } catch (e) {} });
+    el.appendChild(img);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) el.appendChild(document.createTextNode(text.slice(last)));
+}
+
+function addMsg(role, text, ts, cls, atts) {
   setEmpty(false);
   const el = document.createElement("div");
   el.className = "msg " + (cls || (role === "user" ? "me" : "agent"));
   const who = role === "user" ? "ВЫ" : "DSH";
   el.innerHTML = '<div class="meta">' + who + " · " + hhmm(ts) + "</div>" +
                  '<div class="text"></div>';
-  el.querySelector(".text").textContent = text;
+  fillText(el.querySelector(".text"), text || "");
+  for (const a of atts || []) {
+    if (a.kind === "image") {
+      const img = document.createElement("img");
+      img.className = "chat-img";
+      img.alt = a.name || "";
+      img.loading = "lazy";
+      img.src = filexUrl(a.ref, a.mediaType);
+      img.addEventListener("click", () => { try { window.open(img.src, "_blank"); } catch (e) {} });
+      el.appendChild(img);
+    } else if (a.kind === "file") {
+      const link = document.createElement("a");
+      link.className = "chat-file";
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "📎 " + (a.name || "файл");
+      link.href = filexUrl(a.ref, a.mediaType);
+      el.appendChild(link);
+    }
+  }
   $("#msgs").appendChild(el);
   scrollBottom(true);
   return el;
@@ -195,7 +275,7 @@ function renderMessages(list) {
   const m = $("#msgs");
   m.innerHTML = '<div class="empty" id="empty"><div class="empty-logo">&#9638;&#9639;&#9638;</div>' +
     '<div>СЕССИЯ ПУСТА</div><div class="empty-hint">НАПИШИТЕ ПЕРВОЕ СООБЩЕНИЕ</div></div>';
-  for (const item of list) addMsg(item.role, item.text, item.ts);
+  for (const item of list) addMsg(item.role, item.text, item.ts, null, item.atts);
   if (!list.length) setEmpty(true); else setEmpty(false);
 }
 
@@ -252,9 +332,18 @@ async function openSession(id) {
   state.active = id;
   const myOpen = ++openSeq;
   $("#alog-lines").innerHTML = "";  // лог агента — свой у каждого чата
+  const cached = state.histCache[id];
+  if (cached) {  // мгновенный рендер из кэша, свежие данные догружаются
+    renderMessages(cached.messages || []);
+    state.model = cached.model || state.model;
+    updateChip(); renderSessions(); updateTok(); renderAsks();
+  }
   try {
     const r = await api("/api/sessions/" + encodeURIComponent(id) + "/messages");
     if (myOpen !== openSeq) return;  // пока грузилась история, переключились
+    state.histCache[id] = r;
+    const keys = Object.keys(state.histCache);
+    if (keys.length > 12) delete state.histCache[keys[0]];
     renderMessages(r.messages || []);
     state.model = r.model || "";
     updateChip();
@@ -262,7 +351,9 @@ async function openSession(id) {
     updateTok();
     renderAsks();
     wsSend({ t: "sub", sid: id });
-  } catch (e) { toast("НЕ УДАЛОСЬ ЗАГРУЗИТЬ: " + e.message, true); }
+  } catch (e) {
+    if (!cached) toast("НЕ УДАЛОСЬ ЗАГРУЗИТЬ: " + e.message, true);
+  }
 }
 
 let openSeq = 0;
@@ -372,51 +463,33 @@ async function send() {
   const ctl = new AbortController();
   state.abortCtl = ctl;
   try {
-    const headers = { "Content-Type": "application/json" };
-    if (isTG()) headers["X-Telegram-Init-Data"] = tg.initData;
-    else if (deviceToken()) headers["X-Device-Token"] = deviceToken();
-    else headers["X-App-Token"] = webToken();
     const res = await fetch(apiBase() + "/api/sessions/" + encodeURIComponent(sid) + "/send", {
-      method: "POST", headers, body: JSON.stringify({ text }), signal: ctl.signal,
+      method: "POST", headers: authHeaders(true), body: JSON.stringify({ text }), signal: ctl.signal,
     });
     if (!res.ok || !res.body) {
       let msg = "HTTP " + res.status;
       try { const j = await res.json(); if (j.error) msg = j.error; } catch (e) {}
       throw new Error(msg);
     }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
     let full = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf("\n\n")) >= 0) {
-        const raw = buf.slice(0, idx); buf = buf.slice(idx + 2);
-        for (const line of raw.split("\n")) {
-          if (!line.startsWith("data:")) continue;
-          let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch (e) { continue; }
-          if (ev.type === "delta" && ev.text) {
-            full += ev.text;
-            if (state.active === sid) {  // рисуем только если чат открыт
-              const el = liveAgentBubble();
-              el.querySelector(".text").textContent = full;
-              scrollBottom();
-            }
-          } else if (ev.type === "done") {
-            if (state.active === sid) {
-              const el = document.querySelector(".msg.agent.live");
-              if (el) { el.classList.remove("live", "busy-pulse"); if (!full) el.querySelector(".text").textContent = ev.text || "(пусто)"; }
-            }
-            full = "";
-          } else if (ev.type === "error") {
-            throw new Error(ev.message || "ошибка агента");
-          }
+    await readSSE(res, (ev) => {
+      if (ev.type === "delta" && ev.text) {
+        full += ev.text;
+        if (state.active === sid) {  // рисуем только если чат открыт
+          const el = liveAgentBubble();
+          el.querySelector(".text").textContent = full;
+          scrollBottom();
         }
+      } else if (ev.type === "done") {
+        if (state.active === sid) {
+          const el = document.querySelector(".msg.agent.live");
+          if (el) { el.classList.remove("live", "busy-pulse"); if (!full) el.querySelector(".text").textContent = ev.text || "(пусто)"; }
+        }
+        full = "";
+      } else if (ev.type === "error") {
+        throw new Error(ev.message || "ошибка агента");
       }
-    }
+    });
     haptic("ok");
   } catch (e) {
     if (e.name === "AbortError") toast("ОСТАНОВЛЕНО");
@@ -434,6 +507,73 @@ async function stop() {
   try {
     await api("/api/sessions/" + encodeURIComponent(state.active) + "/stop", { method: "POST" });
   } catch (e) {}
+}
+
+/* ---------- чтение SSE-стрима (send / attach) ---------- */
+async function readSSE(res, onEv) {
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const raw = buf.slice(0, idx); buf = buf.slice(idx + 2);
+      for (const line of raw.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch (e) { continue; }
+        onEv(ev);
+      }
+    }
+  }
+}
+
+/* ---------- файлы и фото: лонг-пресс ⌨ (0.5с) -> пикер iOS ---------- */
+async function sendFile(f) {
+  if (!state.active) { toast("СНАЧАЛА СОЗДАЙ СЕССИЮ", true); openDrawer(); return; }
+  if (f.size > 25 * 1024 * 1024) { toast("ФАЙЛ БОЛЬШЕ 25 МБ", true); return; }
+  const sid = state.active;
+  addMsg("user", "📎 " + f.name + " · " + Math.max(1, Math.round(f.size / 1024)) + " КБ");
+  haptic();
+  setSessionBusy(sid, true);
+  try {
+    const res = await fetch(apiBase() + "/api/sessions/" + encodeURIComponent(sid) +
+      "/attach?name=" + encodeURIComponent(f.name),
+      { method: "POST", headers: authHeaders(false), body: f });
+    if (!res.ok || !res.body) {
+      let msg = "HTTP " + res.status;
+      try { const j = await res.json(); if (j.error) msg = j.error; } catch (e) {}
+      throw new Error(msg);
+    }
+    let full = "";
+    await readSSE(res, (ev) => {
+      if (ev.type === "delta" && ev.text) {
+        full += ev.text;
+        if (state.active === sid) {
+          const el = liveAgentBubble();
+          el.querySelector(".text").textContent = full;
+          scrollBottom();
+        }
+      } else if (ev.type === "done") {
+        if (state.active === sid) {
+          const el = document.querySelector(".msg.agent.live");
+          if (el) { el.classList.remove("live", "busy-pulse"); if (!full) el.querySelector(".text").textContent = "(принято)"; }
+        }
+        full = "";
+      } else if (ev.type === "error") {
+        throw new Error(ev.message || "ошибка загрузки файла");
+      }
+    });
+    haptic("ok");
+  } catch (e) {
+    addMsg("error", "⚠ " + e.message, null, "err-msg");
+    haptic("err");
+  } finally {
+    setSessionBusy(sid, false);
+    loadState(true).catch(() => {});
+  }
 }
 
 /* ---------- drawer / sheet ---------- */
@@ -498,8 +638,12 @@ function updateLoadbar() {
   }
   updateSendBtn();
   const alog = $("#alog");
-  if (alog) alog.classList.toggle("hidden",
-    !busy || !$("#alog-lines").children.length);
+  if (alog) {
+    /* показываем ТОЛЬКО текущую работу; завершилось — скрыли и очистили */
+    const show = busy && $("#alog-lines").children.length > 0;
+    alog.classList.toggle("hidden", !show);
+    if (!busy) $("#alog-lines").innerHTML = "";
+  }
 }
 
 /* кнопка отправки/остановки: следит и за своей отправкой, и за ходом
@@ -539,7 +683,7 @@ function logLine(text) {
   const el = document.createElement("div");
   el.textContent = text;
   lines.appendChild(el);
-  while (lines.children.length > 8) lines.removeChild(lines.firstChild);
+  while (lines.children.length > 2) lines.removeChild(lines.firstChild);  // только текущая работа
   lines.scrollTop = lines.scrollHeight;
   const s = activeSession();
   if (s && (state.streamingSids.has(s.id) || s.running)) {
@@ -565,14 +709,20 @@ function showAsk(ev) {
       '<button class="btn stop" data-v="rejected">ЗАПРЕТИТЬ</button></div>';
   } else if (ev.event === "user-questions/request") {
     const qs = req.questions || [];
-    body = qs.map((q) => {
+    /* раньше здесь было присваивание в необъявленную переменную — в strict-режиме
+       креш и пустая карточка; заодно добавлен свой ответ текстом */
+    card.innerHTML = qs.map((q) => {
       const opts = (q.options || []).map((o) => {
         const ans = JSON.stringify({ answers: [{ id: q.id, selected: [o.label], custom: "" }] });
         return '<button class="btn primary" data-answer="' + esc(ans) + '">' + esc(o.label) + "</button>";
       }).join("");
+      const custom = '<div class="ask-c">' +
+        '<input class="ask-inp" data-qid="' + esc(q.id) + '" placeholder="Свой ответ…" ' +
+        'autocomplete="off" autocapitalize="off" spellcheck="false">' +
+        '<button class="btn" data-custom="' + esc(q.id) + '">ОК</button></div>';
       return '<div class="ask-t">ВОПРОС' + (q.header ? " · " + esc(q.header) : "") + "</div>" +
         '<div class="ask-d">' + esc(q.question || "") + "</div>" +
-        '<div class="ask-b">' + opts + "</div>";
+        (opts ? '<div class="ask-b">' + opts + "</div>" : "") + custom;
     }).join("");
   } else {
     card.innerHTML =
@@ -586,6 +736,12 @@ function showAsk(ev) {
     let val = null;
     if (b.dataset.v !== undefined) val = b.dataset.v;
     else if (b.dataset.answer) { try { val = JSON.parse(b.dataset.answer); } catch (e) {} }
+    else if (b.dataset.custom !== undefined) {
+      const inp = [...card.querySelectorAll(".ask-inp")]
+        .find((i) => i.dataset.qid === b.dataset.custom);
+      const t = (inp && inp.value.trim()) || "";
+      val = t ? { answers: [{ id: b.dataset.custom, selected: [], custom: t }] } : null;
+    }
     answerAsk(ev.eventId, val);
   }));
   box.appendChild(card);
@@ -840,14 +996,31 @@ $("#btn-send").addEventListener("click", send);
 $("#btn-send").addEventListener("pointerdown", (e) => e.preventDefault());
 const kbBtn = $("#kb-call");
 let kbWasUp = false;
+let lpTimer = null, lpFired = false;
 kbBtn.addEventListener("pointerdown", (e) => {
   /* preventDefault: кнопка не забирает фокус, состояние поля стабильно */
   e.preventDefault();
   kbWasUp = document.activeElement === inpEl && kbUp && !inpEl.readOnly;
+  lpFired = false;
+  clearTimeout(lpTimer);
+  /* лонг-пресс ≥0.5с — стандартный пикер iOS (фото/файлы) */
+  lpTimer = setTimeout(() => {
+    lpFired = true;
+    haptic();
+    try { $("#file-in").click(); } catch (err) {}
+  }, 500);
 });
+["pointerup", "pointercancel", "pointerleave"].forEach((evn) =>
+  kbBtn.addEventListener(evn, () => clearTimeout(lpTimer)));
 kbBtn.addEventListener("click", () => {
+  if (lpFired) { lpFired = false; return; }  // лонг-пресс уже открыл пикер
   if (kbWasUp) kbClose(); else kbOpen();
   haptic();
+});
+$("#file-in").addEventListener("change", async () => {
+  const files = [...($("#file-in").files || [])];
+  $("#file-in").value = "";
+  for (const f of files) await sendFile(f);
 });
 $("#inp").addEventListener("input", autosize);
 const coarsePointer = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
