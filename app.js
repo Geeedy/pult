@@ -32,6 +32,7 @@ function logout() {
       body: JSON.stringify({ deviceToken: dev }),
     }).catch(() => {});
   } catch (e) {}
+  syncSWAuth(true);
   location.replace("index.html");
 }
 
@@ -929,11 +930,13 @@ $("#set-save").addEventListener("click", () => {
     else localStorage.removeItem(SERVER_KEY);
   } catch (e) {}
   closeSet(); haptic("ok"); toast("АДРЕС СОХРАНЁН");
+  syncSWAuth();
   if (conn.base !== undefined && conn.base !== apiBase()) wsConnect();
 });
 $("#set-auto").addEventListener("click", () => {
   try { localStorage.removeItem(SERVER_KEY); } catch (e) {}
   closeSet(); haptic("ok"); toast("АВТОАДРЕС");
+  syncSWAuth();
   if (conn.base !== undefined && conn.base !== apiBase()) wsConnect();
 });
 $("#set-logout").addEventListener("click", logout);
@@ -1026,6 +1029,41 @@ $("#push-test").addEventListener("click", async () => {
 
 if (!isTG()) { const pb = $("#push-block"); if (pb) pb.hidden = false; }
 
+/* --- service worker: адрес + токен устройства (для ответов кнопками из пуша) --- */
+const AUTH_CACHE = "pult-auth";
+async function syncSWAuth(clear) {
+  if (!("serviceWorker" in navigator) || isTG()) return;
+  try {
+    const cache = await caches.open(AUTH_CACHE);
+    if (clear) { await cache.delete("/__auth"); return; }
+    await cache.put("/__auth", new Response(JSON.stringify(
+      { base: apiBase(), token: deviceToken() || webToken() })));
+  } catch (e) {}
+}
+
+/* открыть карточку подтверждения: при необходимости переключить чат */
+function openAskByEvent(eventId, tries) {
+  const a = state.asks.find((x) => x.eventId === eventId);
+  if (a) {
+    const go = (a.sessionId && a.sessionId !== state.active)
+      ? openSession(a.sessionId) : Promise.resolve();
+    go.then(() => {
+      renderAsks();
+      const el = document.getElementById("ask-" + eventId);
+      if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    return;
+  }
+  if ((tries || 0) < 10) setTimeout(() => openAskByEvent(eventId, (tries || 0) + 1), 500);
+}
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (e) => {
+    const m = e.data || {};
+    if (m.type === "open-ask" && m.eventId) openAskByEvent(m.eventId);
+  });
+}
+
 /* ---------- start ---------- */
 (async function start() {
   if (!isTG() && !deviceToken() && webToken()) {
@@ -1033,6 +1071,13 @@ if (!isTG()) { const pb = $("#push-block"); if (pb) pb.hidden = false; }
     try { if ((await sha256Hex(webToken())) !== TOKEN_HASH) { logout(); return; } } catch (e) {}
   }
   updateConn(false, "СОЕДИНЕНИЕ…");
+  /* хеш #ask=<eventId> — пришли из пуша: открыть нужный чат с карточкой */
+  if (location.hash.startsWith("#ask=")) {
+    const askId = decodeURIComponent(location.hash.slice(5));
+    history.replaceState(null, "", location.pathname);
+    openAskByEvent(askId);
+  }
+  syncSWAuth();
   /* миграция: сырой ключ -> токен устройства (тихо, один раз, повтор при неудаче) */
   if (!isTG() && !deviceToken() && webToken()) {
     (async () => {
@@ -1048,6 +1093,7 @@ if (!isTG()) { const pb = $("#push-block"); if (pb) pb.hidden = false; }
               localStorage.setItem(DEVICE_KEY, j.deviceToken);
               localStorage.removeItem(TOKEN_KEY);
             } catch (e) {}
+            syncSWAuth();
           }
         }
       } catch (e) {}
