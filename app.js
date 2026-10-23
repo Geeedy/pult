@@ -6,10 +6,12 @@ const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : 
 /* ---------- веб-авторизация и адрес бэкенда (веб-версия) ---------- */
 const TOKEN_HASH = "e5a171a04b3ba5f5870d9d14c1f2cbfc1f6eb661faf9c5243693b3591a198079";
 const TOKEN_KEY = "dsh_token";
+const DEVICE_KEY = "dsh_dev";
 const SERVER_KEY = "dsh_server_manual";
 
 function isTG() { return !!(tg && tg.initData); }
 function webToken() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; } }
+function deviceToken() { try { return localStorage.getItem(DEVICE_KEY) || ""; } catch (e) { return ""; } }
 function manualServer() { try { return localStorage.getItem(SERVER_KEY) || ""; } catch (e) { return ""; } }
 
 function apiBase() {
@@ -21,7 +23,15 @@ function apiBase() {
 }
 
 function logout() {
-  try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+  const dev = deviceToken();
+  try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(DEVICE_KEY); } catch (e) {}
+  /* сервер: забыть это устройство */
+  try {
+    fetch(apiBase() + "/api/device/logout", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceToken: dev }),
+    }).catch(() => {});
+  } catch (e) {}
   location.replace("index.html");
 }
 
@@ -30,8 +40,8 @@ async function sha256Hex(s) {
   return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-/* гейт: в вебе без ключа — на страницу входа; в TG ключ не нужен */
-if (!isTG() && !webToken()) { location.replace("index.html"); throw new Error("unauthorized"); }
+/* гейт: в вебе без ключа/токена устройства — на страницу входа; в TG не нужен */
+if (!isTG() && !webToken() && !deviceToken()) { location.replace("index.html"); throw new Error("unauthorized"); }
 
 /* ---------- Telegram init ---------- */
 /* Отступ сверху: статус-бар + нативная шапка Telegram (пока нет фуллскрина).
@@ -135,9 +145,10 @@ function toast(text, bad) {
 async function api(path, opts = {}) {
   const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
   if (isTG()) headers["X-Telegram-Init-Data"] = tg.initData;
+  else if (deviceToken()) headers["X-Device-Token"] = deviceToken();
   else headers["X-App-Token"] = webToken();
   const res = await fetch(apiBase() + path, Object.assign({}, opts, { headers }));
-  if (res.status === 401 && !isTG()) { logout(); throw new Error("unauthorized"); }
+  if ((res.status === 401 || res.status === 403) && !isTG()) { logout(); throw new Error("unauthorized"); }
   if (!res.ok) {
     let msg = "HTTP " + res.status;
     try { const j = await res.json(); if (j.error) msg = j.error; } catch (e) {}
@@ -362,6 +373,7 @@ async function send() {
   try {
     const headers = { "Content-Type": "application/json" };
     if (isTG()) headers["X-Telegram-Init-Data"] = tg.initData;
+    else if (deviceToken()) headers["X-Device-Token"] = deviceToken();
     else headers["X-App-Token"] = webToken();
     const res = await fetch(apiBase() + "/api/sessions/" + encodeURIComponent(sid) + "/send", {
       method: "POST", headers, body: JSON.stringify({ text }), signal: ctl.signal,
@@ -708,7 +720,7 @@ function wsConnect() {
   try {
     const qs = isTG()
       ? "init=" + encodeURIComponent(tg.initData || "")
-      : "token=" + encodeURIComponent(webToken());
+      : "token=" + encodeURIComponent(deviceToken() || webToken());
     conn.base = apiBase();
     ws = new WebSocket(conn.base.replace(/^http/, "ws") + "/api/ws?" + qs +
                        "&last=" + (conn.lastSeq || 0));
@@ -898,6 +910,7 @@ if (tg && tg.BackButton) {
 function openSet() {
   $("#set-server").value = manualServer() || apiBase();
   $("#setsheet").classList.add("open"); $("#scrim").classList.add("show");
+  updatePushUI();
 }
 function closeSet() {
   $("#setsheet").classList.remove("open");
@@ -946,12 +959,100 @@ function maybeAutoHeal() {
   return false;
 }
 
+/* ---------- push-уведомления (iOS 16.4+, установленное на «Домой» PWA) ---------- */
+function urlB64ToUint8Array(b64) {
+  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
+async function pushStatusText() {
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      return "нужна установка на «Домой» (iOS 16.4+)";
+    }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    return sub ? "включены" : "выключены";
+  } catch (e) { return "неизвестно"; }
+}
+
+async function updatePushUI() {
+  const el = $("#push-state");
+  if (el) el.textContent = "СТАТУС: " + (await pushStatusText());
+}
+
+$("#push-enable").addEventListener("click", async () => {
+  try {
+    if (!("PushManager" in window)) { haptic("err"); toast("ПУШИ НЕ ПОДДЕРЖАНЫ", true); return; }
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { haptic("err"); toast("НЕТ РАЗРЕШЕНИЯ", true); return; }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { publicKey } = await api("/api/push/key");
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlB64ToUint8Array(publicKey),
+      });
+    }
+    await api("/api/push/subscribe",
+      { method: "POST", body: JSON.stringify({ subscription: sub.toJSON() }) });
+    haptic("ok"); toast("ПУШИ ВКЛЮЧЕНЫ"); updatePushUI();
+  } catch (e) { haptic("err"); toast("ОШИБКА: " + e.message, true); }
+});
+
+$("#push-off").addEventListener("click", async () => {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      await api("/api/push/unsubscribe",
+        { method: "POST", body: JSON.stringify({ endpoint: sub.endpoint }) }).catch(() => {});
+      await sub.unsubscribe();
+    }
+    toast("ПУШИ ВЫКЛЮЧЕНЫ"); updatePushUI();
+  } catch (e) { haptic("err"); toast("ОШИБКА: " + e.message, true); }
+});
+
+$("#push-test").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/push/test", { method: "POST", body: "{}" });
+    toast(r.sent ? "ОТПРАВЛЕНО: " + r.sent : "НЕТ ПОДПИСОК", !r.sent);
+  } catch (e) { haptic("err"); toast("ОШИБКА: " + e.message, true); }
+});
+
+if (!isTG()) { const pb = $("#push-block"); if (pb) pb.hidden = false; }
+
 /* ---------- start ---------- */
 (async function start() {
-  if (!isTG()) {
+  if (!isTG() && !deviceToken() && webToken()) {
+    /* легаси-вход по сыром ключу: сверяем хэш локально */
     try { if ((await sha256Hex(webToken())) !== TOKEN_HASH) { logout(); return; } } catch (e) {}
   }
   updateConn(false, "СОЕДИНЕНИЕ…");
+  /* миграция: сырой ключ -> токен устройства (тихо, один раз, повтор при неудаче) */
+  if (!isTG() && !deviceToken() && webToken()) {
+    (async () => {
+      try {
+        const r = await fetch(apiBase() + "/api/device/login", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key: webToken() }),
+        });
+        if (r.ok) {
+          const j = await r.json();
+          if (j.deviceToken) {
+            try {
+              localStorage.setItem(DEVICE_KEY, j.deviceToken);
+              localStorage.removeItem(TOKEN_KEY);
+            } catch (e) {}
+          }
+        }
+      } catch (e) {}
+    })();
+  }
   /* заполняем лоадбар палочками с каскадной задержкой */
   const bar = $("#loadbar");
   if (bar) {

@@ -7,6 +7,7 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Вход</title>
 <link rel="icon" href="data:,">
+<script src="web-config.js"></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   html,body{height:100%}
@@ -41,8 +42,11 @@
 <script>
 "use strict";
 /* Проверка ключа: SHA-256 от введённой строки сравнивается с эталоном.
-   Неверный ввод — просто тихий сброс поля, без сообщений. */
+   Неверный ввод — просто тихий сброс поля, без сообщений.
+   Верный ключ сервер обменивает на токен устройства: с этого устройства
+   страница входа больше не показывается (пока не нажать «ВЫЙТИ»). */
 const HASH = "e5a171a04b3ba5f5870d9d14c1f2cbfc1f6eb661faf9c5243693b3591a198079";
+const BACKEND = String(window.DSH_BACKEND || "").trim().replace(/\/+$/, "");
 
 async function sha256(s) {
   const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
@@ -56,29 +60,66 @@ try {
   }
 } catch (e) {}
 
-/* Уже входили на этом устройстве — сразу дальше */
+/* Уже запомненное устройство — сразу дальше, без пароля */
 (async () => {
   try {
-    const t = localStorage.getItem("dsh_token");
-    if (t && (await sha256(t)) === HASH) location.replace("app.html");
+    const dev = localStorage.getItem("dsh_dev");
+    if (dev) {
+      const r = await fetch((BACKEND || "") + "/api/device/check", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deviceToken: dev }),
+      });
+      if (r.ok) {
+        const j = await r.json();
+        if (j.ok) { location.replace("app.html"); return; }
+      }
+      localStorage.removeItem("dsh_dev");
+    } else {
+      const t = localStorage.getItem("dsh_token");
+      if (t && (await sha256(t)) === HASH) location.replace("app.html");
+    }
   } catch (e) {}
 })();
 
 const inp = document.getElementById("k");
-document.getElementById("f").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const v = inp.value;
-  let ok = false;
-  try { ok = !!v && (await sha256(v)) === HASH; } catch (err) {}
-  if (ok) {
-    try { localStorage.setItem("dsh_token", v); } catch (err) {}
-    location.replace("app.html");
-    return;
-  }
+let busy = false;
+
+function fail() {
   inp.value = "";
   inp.classList.remove("shake");
   void inp.offsetWidth;
   inp.classList.add("shake");
+}
+
+document.getElementById("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (busy) return;
+  const v = inp.value;
+  let ok = false;
+  try { ok = !!v && (await sha256(v)) === HASH; } catch (err) {}
+  if (!ok) { fail(); return; }
+  busy = true;
+  /* ключ -> токен устройства (сервер запоминает это устройство) */
+  let dev = null, rejected = false;
+  try {
+    const r = await fetch((BACKEND || "") + "/api/device/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: v }),
+    });
+    if (r.ok) { const j = await r.json(); dev = j.deviceToken || null; }
+    else if (r.status === 401 || r.status === 403) rejected = true;
+  } catch (err) { /* сервер недоступен — тихий оффлайн-фолбэк ниже */ }
+  busy = false;
+  if (rejected) { fail(); return; }
+  try {
+    if (dev) {
+      localStorage.setItem("dsh_dev", dev);
+      localStorage.removeItem("dsh_token");
+    } else {
+      localStorage.setItem("dsh_token", v); /* фолбэк, если сервер не ответился */
+    }
+  } catch (err) {}
+  location.replace("app.html");
 });
 </script>
 </body>
