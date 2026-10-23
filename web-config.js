@@ -1,2 +1,2 @@
-/* адрес бэкенда; на GitHub Pages этот файл обновляется автоматически при смене туннеля */
-window.DSH_BACKEND = "";
+/* адрес бэкенда; обновляется автоматически при смене туннеля */
+window.DSH_BACKEND = "https://stadium-original-call-edges.trycloudflare.com";
