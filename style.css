@@ -1,0 +1,240 @@
+/* ============================================================
+   DSH REMOTE — cyberpunk UI
+   Токены взяты из TGcontrol/webui.py (панель L1114–1246).
+   +adapt — мобильные добавления (safe-area, dvh, тач-статы).
+   ============================================================ */
+:root{
+  --bg:#04060c; --panel:#0a101d; --panel2:#0d1526; --inset:#060a13;
+  --cy:#00e6ff; --mg:#ff2bd6; --gr:#2bff9e; --dim:#5c7a95; --txt:#c9e6f5;
+  --ph:#3d5568; --meta:#4f7a99; --warn:#ffd166; --err:#ff5c7a;
+  --bd:rgba(0,230,255,.25); --bd-soft:rgba(0,230,255,.14);
+  --glow:0 0 12px rgba(0,230,255,.4);
+  --glow-soft:0 0 10px rgba(0,230,255,.25);
+  --glow-mg:0 0 12px rgba(255,43,214,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--txt);
+  font:14px/1.45 "JetBrains Mono",ui-monospace,Consolas,monospace;
+  height:100vh;height:100dvh; /* +adapt */
+  display:flex;flex-direction:column;overflow:hidden;
+  padding-top:max(env(safe-area-inset-top), var(--tg-safe, 0px)); /* +adapt */
+  -webkit-tap-highlight-color:transparent;
+}
+body::before{ /* scanlines — фирменный эффект TGcontrol */
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:repeating-linear-gradient(0deg,rgba(0,230,255,.015) 0 1px,transparent 1px 3px);
+}
+button{font:inherit;cursor:pointer;touch-action:manipulation}
+
+/* ---------- header ---------- */
+header{
+  display:flex;align-items:center;gap:10px;padding:10px 12px;position:relative;z-index:3;
+  border-bottom:1px solid var(--bd);background:linear-gradient(180deg,#0a1220,#05080f);
+}
+.icon-btn{
+  background:transparent;border:1px solid var(--bd);color:var(--txt);
+  width:38px;height:38px;border-radius:3px;font-size:15px;line-height:1;flex:none;transition:.15s;
+}
+.icon-btn:active{background:rgba(0,230,255,.12);box-shadow:var(--glow-soft);color:var(--cy)}
+.icon-btn.small{width:30px;height:30px;font-size:12px}
+.brand{
+  flex:1;min-width:0;color:var(--cy);font-weight:700;letter-spacing:3px;font-size:13px;
+  text-shadow:0 0 8px rgba(0,230,255,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.brand span{color:var(--dim);text-shadow:none}
+.loadbar{
+  flex:1;min-width:60px;height:19px;display:flex;gap:3px;align-items:stretch;
+  cursor:pointer;
+}
+.tok{flex:none;color:var(--meta);font-size:10px;letter-spacing:1px;
+  border:1px solid rgba(79,122,153,.35);border-radius:3px;
+  padding:4px 7px;white-space:nowrap}
+.loadbar i{flex:1;background:rgba(0,230,255,.10);
+  border:1px solid rgba(0,230,255,.16);border-radius:2px}
+.loadbar.hidden{display:none}
+.loadbar.on i{animation:segpulse 1.08s linear infinite}
+@keyframes segpulse{
+  0%,100%{background:rgba(0,230,255,.10);box-shadow:none}
+  45%{background:var(--cy);box-shadow:0 0 9px rgba(0,230,255,.85)}
+}
+
+.chip{
+  display:flex;align-items:center;gap:7px;background:transparent;border:1px solid var(--bd);
+  color:var(--txt);padding:9px 10px;border-radius:3px;font-size:11px;letter-spacing:1px;
+  max-width:46vw;flex:none;transition:.15s;
+}
+.chip:active{border-color:var(--cy);color:var(--cy);box-shadow:var(--glow-soft)}
+.chip .m-name{color:var(--cy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip .caret{color:var(--dim);font-size:9px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none;transition:.2s}
+.dot.on{background:var(--gr);box-shadow:0 0 8px rgba(43,255,158,.7)}
+.dot.busy{background:var(--warn);box-shadow:0 0 8px rgba(255,209,102,.7);animation:blink 1s steps(2) infinite}
+.dot.err{background:var(--err);box-shadow:0 0 8px rgba(255,92,122,.7)}
+
+/* ---------- чат ---------- */
+#msgs{
+  flex:1;overflow-y:auto;overscroll-behavior:contain;padding:12px 10px 4px;
+  display:flex;flex-direction:column;position:relative;z-index:1;
+}
+.empty{margin:auto;text-align:center;color:var(--ph);letter-spacing:2px;font-size:12px}
+.empty-logo{color:var(--cy);opacity:.4;font-size:22px;margin-bottom:10px;text-shadow:0 0 12px rgba(0,230,255,.4)}
+.empty-hint{margin-top:6px;font-size:10px;letter-spacing:1px;color:var(--meta)}
+.msg{max-width:86%;margin-bottom:10px;padding:7px 11px;border-radius:6px;
+  white-space:pre-wrap;word-break:break-word;animation:fadein .18s ease-out}
+.msg .meta{font-size:10px;color:var(--dim);margin-bottom:3px;letter-spacing:1px}
+.msg .text{-webkit-user-select:text;user-select:text}
+.msg.agent{align-self:flex-start;background:#0c1826;border-left:2px solid var(--cy)}
+.msg.me{align-self:flex-end;background:#160d1f;border-right:2px solid var(--mg);text-align:right}
+.msg.err-msg{align-self:center;background:transparent;border:1px solid rgba(255,92,122,.5);color:var(--err);
+  font-size:12px;text-align:center;max-width:94%;box-shadow:0 0 10px rgba(255,92,122,.15)}
+.msg .cursor{display:inline-block;width:8px;height:14px;background:var(--cy);vertical-align:-2px;
+  margin-left:2px;box-shadow:0 0 6px rgba(0,230,255,.8);animation:blink 1s steps(2) infinite}
+
+/* ---------- инпут-бар ---------- */
+.inputbar{
+  display:flex;align-items:flex-end;gap:8px;padding:8px;background:var(--panel);z-index:2;
+  border-top:1px solid var(--bd-soft);
+  padding-bottom:calc(8px + env(safe-area-inset-bottom)); /* +adapt */
+}
+.inputbar textarea{
+  flex:1;background:var(--inset);border:1px solid var(--bd);color:var(--txt);
+  padding:11px 13px;font-family:inherit;font-size:16px; /* +adapt: против iOS-зума */
+  border-radius:3px;outline:none;resize:none;min-height:44px;max-height:132px;line-height:1.35;
+  transition:border-color .15s, box-shadow .15s;
+}
+.inputbar textarea:focus{border-color:var(--cy);box-shadow:var(--glow-soft)}
+.inputbar textarea::placeholder{color:var(--ph)}
+.btn-send{
+  flex:none;width:44px;height:44px;border-radius:3px;background:transparent;
+  border:1px solid var(--bd);color:var(--cy);font-size:15px;transition:.15s;
+}
+.btn-send:active{background:rgba(0,230,255,.12);box-shadow:var(--glow)}
+.btn-send.stop{border-color:rgba(255,43,214,.5);color:var(--mg);box-shadow:var(--glow-mg)}
+
+/* ---------- drawer сессий ---------- */
+.scrim{position:fixed;inset:0;background:rgba(2,4,9,.72);opacity:0;pointer-events:none;
+  transition:.18s;z-index:8}
+.scrim.show{opacity:1;pointer-events:auto}
+#drawer{
+  position:fixed;top:0;bottom:0;left:0;width:min(86vw,340px);z-index:9;
+  background:var(--panel);border-right:1px solid var(--bd);
+  display:flex;flex-direction:column;transform:translateX(-102%);
+  visibility:hidden; /* закрытая шторка не должна ловить тапы (хит-тест WebView) */
+  transition:transform .18s ease, visibility 0s .18s;
+  padding-top:max(env(safe-area-inset-top), var(--tg-safe, 0px));
+  padding-bottom:env(safe-area-inset-bottom);
+}
+#drawer.open{visibility:visible;transform:translateX(0);transition:transform .18s ease}
+.drawer-head{display:flex;align-items:center;justify-content:space-between;
+  padding:12px;border-bottom:1px solid var(--bd-soft)}
+.drawer-title{color:var(--cy);font-size:12px;letter-spacing:2px;text-shadow:0 0 6px rgba(0,230,255,.6)}
+.btn{background:transparent;border:1px solid rgba(0,230,255,.35);color:var(--txt);
+  padding:8px 14px;border-radius:3px;letter-spacing:1px;transition:.15s}
+.btn.primary{border-color:var(--cy);color:var(--cy);text-shadow:0 0 6px rgba(0,230,255,.6)}
+.btn:active{background:rgba(0,230,255,.12);box-shadow:var(--glow-soft)}
+.btn.small{padding:7px 10px;font-size:11px}
+#sess-list{flex:1;overflow-y:auto;padding:10px}
+.sess{
+  background:var(--panel2);border:1px solid rgba(0,230,255,.16);border-radius:4px;
+  padding:9px 10px;margin-bottom:8px;transition:.15s;cursor:pointer;position:relative;
+}
+.sess:active{border-color:var(--cy)}
+.sess.active{border-color:var(--cy);box-shadow:0 0 10px rgba(0,230,255,.3),inset 0 0 10px rgba(0,230,255,.12)}
+.sess .s-top{display:flex;align-items:baseline;gap:8px;margin-bottom:3px}
+.sess .s-title{flex:1;min-width:0;color:var(--cy);font-size:12px;letter-spacing:1px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sess .s-prev{color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sess .s-time{font-size:9px;color:var(--meta);letter-spacing:1px;flex:none}
+.sess .s-meta{display:flex;align-items:center;gap:6px;margin-top:5px}
+.sess .s-run{font-size:9px;color:var(--cy);letter-spacing:1px;text-shadow:0 0 6px rgba(0,230,255,.6)}
+.s-ask{font-size:9px;color:var(--mg);letter-spacing:1px;
+  text-shadow:0 0 6px rgba(255,43,214,.6);animation:blink 1s steps(2) infinite}
+.minibar{flex:1;height:8px;display:flex;gap:2px;align-items:stretch}
+.minibar i{flex:1;background:rgba(0,230,255,.12);border-radius:1px}
+.minibar.on i{animation:segpulse 1.08s linear infinite}
+
+/* ---------- подтверждения (waterfall) и лог агента ---------- */
+.asks{position:relative;z-index:2;max-height:36vh;overflow-y:auto;
+  border-top:1px solid rgba(255,43,214,.35)}
+.asks.hidden{display:none}
+.ask{background:var(--panel2);padding:9px 12px;
+  border-bottom:1px solid rgba(255,43,214,.25)}
+.ask-t{color:var(--mg);font-size:11px;letter-spacing:1px;margin-bottom:4px;
+  text-shadow:0 0 6px rgba(255,43,214,.5)}
+.ask-d{color:var(--txt);font-size:11px;margin-bottom:8px;word-break:break-word;
+  -webkit-user-select:text;user-select:text}
+.ask-b{display:flex;gap:8px}
+.ask-b .btn{padding:8px 12px;font-size:11px;flex:1}
+.alog{border-top:1px solid var(--bd-soft);background:#050a12}
+.alog.hidden{display:none}
+.alog-lines{max-height:88px;overflow-y:auto;padding:6px 12px;
+  font-size:10px;line-height:1.5;color:var(--meta)}
+.alog-lines div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.sess .s-model{font-size:9px;color:var(--meta);border:1px solid rgba(79,122,153,.4);border-radius:3px;
+  padding:0 5px;letter-spacing:1px;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drawer-foot{display:flex;align-items:center;gap:8px;padding:11px 12px;
+  border-top:1px solid var(--bd-soft);font-size:10px;letter-spacing:1px;color:var(--dim)}
+
+/* ---------- sheet моделей ---------- */
+.sheet{
+  position:fixed;top:0;bottom:0;right:0;width:min(86vw,340px);z-index:9;
+  background:var(--panel);border-left:1px solid var(--bd);
+  display:flex;flex-direction:column;
+  transform:translateX(102%);visibility:hidden;
+  transition:transform .18s ease, visibility 0s .18s;
+  padding-top:max(env(safe-area-inset-top), var(--tg-safe, 0px));
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.sheet.open{transform:translateX(0);visibility:visible;transition:transform .18s ease}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;padding:12px;
+  border-bottom:1px solid var(--bd-soft);position:sticky;top:0;background:var(--panel)}
+.sheet-body{flex:1;min-height:0;overflow-y:auto}
+.sheet-body, #sess-list, .alog-lines, #asks{-webkit-overflow-scrolling:touch}
+.mrow{
+  display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  background:transparent;border:none;border-bottom:1px solid rgba(0,230,255,.08);
+  color:var(--txt);padding:13px 14px;font-size:12px;letter-spacing:1px;transition:.15s;
+}
+.mrow .mk{width:14px;color:var(--dim);flex:none}
+.mrow.sel{color:var(--cy);background:rgba(0,230,255,.06);text-shadow:0 0 6px rgba(0,230,255,.5)}
+.mrow.sel .mk{color:var(--gr)}
+.mrow:active{background:rgba(0,230,255,.1)}
+.mrow .m-desc{color:var(--dim);font-size:10px;margin-left:auto;text-align:right}
+
+/* ---------- toast / keyframes ---------- */
+#toast{position:fixed;left:50%;transform:translateX(-50%);z-index:20;
+  bottom:calc(76px + env(safe-area-inset-bottom));
+  background:#0a1622;border:1px solid var(--gr);color:var(--gr);
+  padding:9px 16px;border-radius:4px;box-shadow:0 0 14px rgba(43,255,158,.35);
+  font-size:11px;letter-spacing:1px;opacity:0;transition:.3s;pointer-events:none;max-width:90vw;
+  text-align:center}
+#toast.show{opacity:1}
+@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:.25}}
+@keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes flick{0%,100%{box-shadow:0 0 2px rgba(0,230,255,.12);border-color:rgba(0,230,255,.22)}
+  50%{box-shadow:0 0 9px rgba(0,230,255,.38);border-color:rgba(0,230,255,.5)}}
+.busy-pulse{animation:flick 1.3s ease-in-out infinite}
+
+/* ---------- скроллбар ---------- */
+::-webkit-scrollbar{width:8px}
+::-webkit-scrollbar-thumb{background:rgba(0,230,255,.25);border-radius:4px}
+@supports (scrollbar-color: red blue){
+  *{scrollbar-width:thin;scrollbar-color:rgba(0,230,255,.25) transparent}
+}
+
+/* ---------- настройки (веб-версия) ---------- */
+.set-body{padding:14px}
+.set-label{color:var(--dim);font-size:10px;letter-spacing:2px;margin-bottom:8px}
+.set-gap{margin-top:20px}
+.set-hint{color:var(--meta);font-size:10px;line-height:1.5;margin-top:8px}
+.set-btns{padding:10px 0 0}
+#set-server{
+  width:100%;background:var(--inset);border:1px solid var(--bd);color:var(--txt);
+  padding:11px 12px;font-family:inherit;font-size:14px;border-radius:3px;outline:none;
+  transition:border-color .15s, box-shadow .15s;
+}
+#set-server:focus{border-color:var(--cy);box-shadow:var(--glow-soft)}
+#set-server::placeholder{color:var(--ph)}

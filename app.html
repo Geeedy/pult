@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#04060c">
+<title>DSH REMOTE</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ПУЛЬТ">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand" id="brand">DSH<span>_REMOTE</span></div>
+  <span class="tok" id="tok" title="Токены активной сессии"></span>
+  <div class="loadbar" id="loadbar" title="Статус харнеса"></div>
+  <button id="btn-set" class="icon-btn small" aria-label="Настройки" hidden>&#9881;</button>
+</header>
+
+<main id="msgs">
+  <div class="empty" id="empty">
+    <div class="empty-logo">&#9638;&#9639;&#9638;</div>
+    <div>НЕТ АКТИВНОЙ СЕССИИ</div>
+    <div class="empty-hint">СВАЙП ОТ ЛЕВОГО КРАЯ — СЕССИИ · ОТ ПРАВОГО — МОДЕЛЬ</div>
+  </div>
+</main>
+
+<div id="asks" class="asks hidden"></div>
+<div id="alog" class="alog hidden"><div id="alog-lines" class="alog-lines"></div></div>
+
+<div class="inputbar">
+  <button id="kb-call" class="btn-send" aria-label="Вызвать клавиатуру">⌨</button>
+  <textarea id="inp" rows="1" readonly placeholder="Сообщение агенту&hellip;"></textarea>
+  <button id="btn-send" class="btn-send" aria-label="Отправить">&#9654;</button>
+</div>
+
+<div id="scrim" class="scrim"></div>
+<nav id="drawer" aria-label="Сессии">
+  <div class="drawer-head">
+    <span class="drawer-title">СЕССИИ</span>
+    <button id="btn-new" class="btn primary small">+ НОВАЯ</button>
+  </div>
+  <div id="sess-list"></div>
+  <div class="drawer-foot" id="conn-state"><span class="dot" id="conn-dot"></span> <span id="conn-text">СОЕДИНЕНИЕ&hellip;</span></div>
+</nav>
+
+<div id="sheet" class="sheet">
+  <div class="sheet-head">
+    <span class="drawer-title">МОДЕЛЬ</span>
+    <button id="sheet-close" class="icon-btn small" aria-label="Закрыть">&#10005;</button>
+  </div>
+  <div id="model-list" class="sheet-body"></div>
+</div>
+
+<div id="setsheet" class="sheet">
+  <div class="sheet-head">
+    <span class="drawer-title">НАСТРОЙКИ</span>
+    <button id="setsheet-close" class="icon-btn small" aria-label="Закрыть">&#10005;</button>
+  </div>
+  <div class="sheet-body set-body">
+    <div class="set-label">АДРЕС СЕРВЕРА</div>
+    <input id="set-server" type="url" inputmode="url" autocomplete="off"
+           autocapitalize="off" spellcheck="false" placeholder="https://&hellip;trycloudflare.com">
+    <div class="set-hint">Адрес туннеля бэкенда. Пусто или «АВТО» — взять из автоконфига (обновляется сам).</div>
+    <div class="ask-b set-btns">
+      <button class="btn primary" id="set-save">СОХРАНИТЬ</button>
+      <button class="btn" id="set-auto">АВТО</button>
+    </div>
+    <div class="set-label set-gap">СЕССИЯ</div>
+    <div class="ask-b set-btns">
+      <button class="btn stop" id="set-logout">ВЫЙТИ</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script src="web-config.js"></script>
+<script src="app.js"></script>
+<script>
+/* PWA: service worker (только в защищённом контексте) */
+if ("serviceWorker" in navigator && (location.protocol === "https:" ||
+    location.hostname === "127.0.0.1" || location.hostname === "localhost")) {
+  addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
