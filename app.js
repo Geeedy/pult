@@ -60,13 +60,27 @@ if (!isTG() && !webToken() && !deviceToken()) { location.replace("index.html"); 
    visualViewport и обновляем на ресайз/клавиатуру. */
 function fitViewport() {
   const vv = window.visualViewport;
-  const h = vv ? Math.round(vv.height) : window.innerHeight;
-  if (h > 0) document.documentElement.style.setProperty("--app-h", h + "px");
+  if (vv) {
+    if (vv.height > 0) {
+      document.documentElement.style.setProperty("--app-h", Math.round(vv.height) + "px");
+    }
+    /* iOS смещает визуальный вьюпорт при клавиатуре — гасим смещение */
+    if (document.body) {
+      document.body.style.transform = vv.offsetTop
+        ? "translateY(" + (-Math.round(vv.offsetTop)) + "px)" : "";
+    }
+  } else {
+    document.documentElement.style.setProperty("--app-h", window.innerHeight + "px");
+  }
+  /* iOS проскролливает документ под фокус — документ прибит, возвращаем */
+  if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
 }
 fitViewport();
 setTimeout(fitViewport, 300);
 setTimeout(fitViewport, 1200);
 addEventListener("resize", fitViewport);
+addEventListener("scroll", fitViewport, { passive: true });
+document.addEventListener("focusin", fitViewport);
 if (window.visualViewport) {
   visualViewport.addEventListener("resize", fitViewport);
   visualViewport.addEventListener("scroll", fitViewport);
@@ -1021,6 +1035,12 @@ $("#file-in").addEventListener("change", async () => {
   const files = [...($("#file-in").files || [])];
   $("#file-in").value = "";
   for (const f of files) await sendFile(f);
+});
+/* надёжный путь для iOS: пикер открывается только внутри прямого жеста */
+$("#btn-attach").addEventListener("pointerdown", (e) => e.preventDefault());
+$("#btn-attach").addEventListener("click", () => {
+  haptic();
+  try { $("#file-in").click(); } catch (e) {}
 });
 $("#inp").addEventListener("input", autosize);
 const coarsePointer = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;

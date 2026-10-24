@@ -18,8 +18,9 @@ html{background:var(--bg)} /* overscroll/инсеты не мигают чёрн
 body{
   background:var(--bg);color:var(--txt);
   font:14px/1.45 "JetBrains Mono",ui-monospace,Consolas,monospace;
-  /* высоту задаёт JS через visualViewport: фикс холодного старта iOS,
-     когда 100dvh до первого тапа отдаёт высоту без нижнего инсета */
+  /* app-shell: прибит к верху вьюпорта — iOS не может «уехать» скроллом
+     документа при открытии клавиатуры; высоту задаёт visualViewport */
+  position:fixed;top:0;left:0;right:0;
   height:100vh;
   height:var(--app-h, 100dvh);
   display:flex;flex-direction:column;overflow:hidden;
