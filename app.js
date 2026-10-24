@@ -54,25 +54,17 @@ async function sha256Hex(s) {
 /* гейт: в вебе без ключа/токена устройства — на страницу входа; в TG не нужен */
 if (!isTG() && !webToken() && !deviceToken()) { location.replace("index.html"); throw new Error("unauthorized"); }
 
-/* ---------- точная высота вьюпорта (холодный старт iOS) ----------
-   До первого тапа 100dvh в standalone-PWA может отдать высоту без нижнего
-   инсета — снизу вылезает чёрная полоса. Берём честную высоту из
-   visualViewport и обновляем на ресайз/клавиатуру. */
+/* ---------- точная геометрия вьюпорта ----------
+   Высоту app-shell задаёт сам webview (body position:fixed по всем краям):
+   iOS сжимает webview под клавиатуру сам. Метрики (dvh, visualViewport.height)
+   на холодном старте iOS врут — не используем их. Здесь только гасим
+   смещение визуального вьюпорта и остаточный скролл документа. */
 function fitViewport() {
   const vv = window.visualViewport;
-  if (vv) {
-    if (vv.height > 0) {
-      document.documentElement.style.setProperty("--app-h", Math.round(vv.height) + "px");
-    }
-    /* iOS смещает визуальный вьюпорт при клавиатуре — гасим смещение */
-    if (document.body) {
-      document.body.style.transform = vv.offsetTop
-        ? "translateY(" + (-Math.round(vv.offsetTop)) + "px)" : "";
-    }
-  } else {
-    document.documentElement.style.setProperty("--app-h", window.innerHeight + "px");
+  if (vv && document.body) {
+    document.body.style.transform = vv.offsetTop
+      ? "translateY(" + (-Math.round(vv.offsetTop)) + "px)" : "";
   }
-  /* iOS проскролливает документ под фокус — документ прибит, возвращаем */
   if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
 }
 fitViewport();
@@ -261,7 +253,7 @@ function addMsg(role, text, ts, cls, atts) {
       img.className = "chat-img";
       img.alt = a.name || "";
       img.loading = "lazy";
-      img.src = filexUrl(a.ref, a.mediaType);
+      img.src = a.localUrl || filexUrl(a.ref, a.mediaType);
       img.addEventListener("click", () => { try { window.open(img.src, "_blank"); } catch (e) {} });
       el.appendChild(img);
     } else if (a.kind === "file") {
@@ -269,8 +261,9 @@ function addMsg(role, text, ts, cls, atts) {
       link.className = "chat-file";
       link.target = "_blank";
       link.rel = "noopener";
+      if (a.localUrl) link.setAttribute("download", a.name || "file");
       link.textContent = "📎 " + (a.name || "файл");
-      link.href = filexUrl(a.ref, a.mediaType);
+      link.href = a.localUrl || filexUrl(a.ref, a.mediaType);
       el.appendChild(link);
     }
   }
@@ -460,12 +453,71 @@ async function send() {
   if (state.streamingSids.has(state.active)) { stop(); return; }
   const inp = $("#inp");
   const text = inp.value.trim();
-  if (!text) return;
+  const files = pendingFiles.slice();
+  if (!text && !files.length) return;
   if (!state.active) { toast("СНАЧАЛА СОЗДАЙ СЕССИЮ", true); openDrawer(); return; }
   inp.value = ""; autosize();
-  addMsg("user", text);
+  if (files.length) {
+    pendingFiles = [];
+    renderAttachBar();
+  }
+  /* пузырь пользователя: текст + локальные превью файлов */
+  const atts = files.map((f) => {
+    if (!f._url) f._url = URL.createObjectURL(f);
+    return (f.type && f.type.startsWith("image/"))
+      ? { kind: "image", localUrl: f._url, name: f.name }
+      : { kind: "file", localUrl: f._url, name: f.name, mediaType: f.type };
+  });
+  addMsg("user", text, null, null, atts);
   haptic();
   const sid = state.active;
+  if (files.length) {
+    /* текст + файлы одним сообщением: multipart -> SSE-стрим */
+    setSessionBusy(sid, true);
+    const ctl = new AbortController();
+    state.abortCtl = ctl;
+    try {
+      const fd = new FormData();
+      if (text) fd.append("text", text);
+      for (const f of files) fd.append("files", f, f.name);
+      const res = await fetch(apiBase() + "/api/sessions/" + encodeURIComponent(sid) + "/sendWith", {
+        method: "POST", headers: authHeaders(false), body: fd, signal: ctl.signal,
+      });
+      if (!res.ok || !res.body) {
+        let msg = "HTTP " + res.status;
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch (e) {}
+        throw new Error(msg);
+      }
+      let full = "";
+      await readSSE(res, (ev) => {
+        if (ev.type === "delta" && ev.text) {
+          full += ev.text;
+          if (state.active === sid) {
+            const el = liveAgentBubble();
+            el.querySelector(".text").textContent = full;
+            scrollBottom();
+          }
+        } else if (ev.type === "done") {
+          if (state.active === sid) {
+            const el = document.querySelector(".msg.agent.live");
+            if (el) { el.classList.remove("live", "busy-pulse"); if (!full) el.querySelector(".text").textContent = ev.text || "(пусто)"; }
+          }
+          full = "";
+        } else if (ev.type === "error") {
+          throw new Error(ev.message || "ошибка отправки");
+        }
+      });
+      haptic("ok");
+    } catch (e) {
+      if (e.name === "AbortError") toast("ОСТАНОВЛЕНО");
+      else { addMsg("error", "⚠ " + e.message, null, "err-msg"); haptic("err"); }
+    } finally {
+      setSessionBusy(sid, false);
+      state.abortCtl = null;
+      loadState(true).catch(() => {});
+    }
+    return;
+  }
   if (conn.open) {
     const req = "s" + (++conn.reqN);
     sendCtxByReq[req] = { sid, full: "" };
@@ -544,50 +596,54 @@ async function readSSE(res, onEv) {
   }
 }
 
-/* ---------- файлы и фото: лонг-пресс ⌨ (0.5с) -> пикер iOS ---------- */
-async function sendFile(f) {
-  if (!state.active) { toast("СНАЧАЛА СОЗДАЙ СЕССИЮ", true); openDrawer(); return; }
-  if (f.size > 25 * 1024 * 1024) { toast("ФАЙЛ БОЛЬШЕ 25 МБ", true); return; }
-  const sid = state.active;
-  addMsg("user", "📎 " + f.name + " · " + Math.max(1, Math.round(f.size / 1024)) + " КБ");
-  haptic();
-  setSessionBusy(sid, true);
-  try {
-    const res = await fetch(apiBase() + "/api/sessions/" + encodeURIComponent(sid) +
-      "/attach?name=" + encodeURIComponent(f.name),
-      { method: "POST", headers: authHeaders(false), body: f });
-    if (!res.ok || !res.body) {
-      let msg = "HTTP " + res.status;
-      try { const j = await res.json(); if (j.error) msg = j.error; } catch (e) {}
-      throw new Error(msg);
+/* ---------- файлы и фото: выбор -> чипы у поля -> отправка вместе с текстом ---------- */
+let pendingFiles = [];
+
+function renderAttachBar() {
+  const bar = $("#attach-bar");
+  bar.innerHTML = "";
+  pendingFiles.forEach((f, i) => {
+    const chip = document.createElement("div");
+    chip.className = "atchip";
+    if (f.type && f.type.startsWith("image/")) {
+      const img = document.createElement("img");
+      if (!f._url) f._url = URL.createObjectURL(f);
+      img.src = f._url;
+      chip.appendChild(img);
+    } else {
+      const ic = document.createElement("span");
+      ic.className = "ic";
+      ic.textContent = "📎";
+      chip.appendChild(ic);
     }
-    let full = "";
-    await readSSE(res, (ev) => {
-      if (ev.type === "delta" && ev.text) {
-        full += ev.text;
-        if (state.active === sid) {
-          const el = liveAgentBubble();
-          el.querySelector(".text").textContent = full;
-          scrollBottom();
-        }
-      } else if (ev.type === "done") {
-        if (state.active === sid) {
-          const el = document.querySelector(".msg.agent.live");
-          if (el) { el.classList.remove("live", "busy-pulse"); if (!full) el.querySelector(".text").textContent = "(принято)"; }
-        }
-        full = "";
-      } else if (ev.type === "error") {
-        throw new Error(ev.message || "ошибка загрузки файла");
-      }
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = f.name;
+    chip.appendChild(nm);
+    const rm = document.createElement("button");
+    rm.className = "rm";
+    rm.textContent = "✕";
+    rm.setAttribute("aria-label", "Убрать файл");
+    rm.addEventListener("click", () => {
+      try { if (f._url) URL.revokeObjectURL(f._url); } catch (e) {}
+      pendingFiles.splice(i, 1);
+      renderAttachBar();
+      haptic();
     });
-    haptic("ok");
-  } catch (e) {
-    addMsg("error", "⚠ " + e.message, null, "err-msg");
-    haptic("err");
-  } finally {
-    setSessionBusy(sid, false);
-    loadState(true).catch(() => {});
+    chip.appendChild(rm);
+    bar.appendChild(chip);
+  });
+  bar.classList.toggle("hidden", pendingFiles.length === 0);
+}
+
+function addPendingFiles(files) {
+  for (const f of files) {
+    if (f.size > 25 * 1024 * 1024) { toast(f.name + ": БОЛЬШЕ 25 МБ", true); continue; }
+    if (pendingFiles.length >= 6) { toast("МАКСИМУМ 6 ФАЙЛОВ", true); break; }
+    pendingFiles.push(f);
   }
+  renderAttachBar();
+  haptic();
 }
 
 /* ---------- drawer / sheet ---------- */
@@ -1034,7 +1090,7 @@ kbBtn.addEventListener("click", () => {
 $("#file-in").addEventListener("change", async () => {
   const files = [...($("#file-in").files || [])];
   $("#file-in").value = "";
-  for (const f of files) await sendFile(f);
+  addPendingFiles(files);
 });
 /* надёжный путь для iOS: пикер открывается только внутри прямого жеста */
 $("#btn-attach").addEventListener("pointerdown", (e) => e.preventDefault());
